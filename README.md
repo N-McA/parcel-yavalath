@@ -1,22 +1,12 @@
-# `rust-parcel-template`
+# Yavalath
 
-**Kickstart your Rust, WebAssembly, and Parcel project!**
+**A small AI/UI for a fun game**
 
-This template comes pre-configured with all the boilerplate for compiling Rust
-to WebAssembly and hooking into a Parcel build pipeline.
+Uses rust, webassembly, service workers to run in the browser. Ai is MCTS, it's pretty weak. Unfortunately there's a bug in `parcel build` that means there's no live demo rn.
+
+![screenshot](screenshot.png)
 
 * `npm run start` -- Serve the project locally for
   development at `http://localhost:1234`.
 
 * `npm run build` -- Bundle the project (in production mode)
-
-
-## Using This Template
-
-```sh
-cargo install wasm-pack
-```
-
-```sh
-npm init rust-parcel my-app
-```
