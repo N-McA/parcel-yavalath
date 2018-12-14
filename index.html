@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>Yavalath</title>
+  <script src="js/index.js"></script>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0rem;
+      max-width: 100%;
+      font-family: Arial, Helvetica, sans-serif
+    }
+
+    .aligner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #board {
+      width: 95vw;
+      /* border: 1px solid black; */
+    }
+
+    @media (min-width: 600px) {
+      #board {
+        width: 600px;
+      }
+    }
+
+    .hex {
+      fill: white;
+      stroke-width: 0.5;
+      stroke: grey;
+      pointer-events: all;
+    }
+
+    .player0-color {
+      fill: #ED6A5A;
+    }
+
+    .player0-color:hover {
+      fill: #ED6A5A !important;
+      fill-opacity: 1 !important;
+    }
+
+    .player0-turn.selected-hex {
+      fill: #ED6A5A;
+      fill-opacity: 0.5;
+    }
+
+    .player1-color {
+      fill: #36C9C6;
+    }
+
+    .player1-color:hover {
+      fill: #36C9C6 !important;
+      fill-opacity: 1 !important;
+    }
+
+    .player1-turn.selected-hex {
+      fill: #36C9C6;
+      fill-opacity: 0.5;
+    }
+
+    .title-text {
+      margin-top: 3vh;
+      text-align: center;
+      line-height: 0.6;
+    }
+
+    h2 {
+      font-size: 0.75rem;
+    }
+
+    .arrow {
+      max-height: 2rem;
+      margin: 1rem;
+      user-select: none;
+    }
+
+    #forward-arrow {
+      transform: scaleX(-1);
+    }
+
+    #reset {
+      color: grey;
+      border: solid 1px grey;
+      padding: 0.25rem;
+      user-select: none;
+      border-radius: 5px;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="title-text">
+    <h1>Yavalath</h1>
+    <h2>four in a row wins</h2>
+    <h2>three in a row loses</h2>
+  </div>
+
+  <div class="aligner" id="board-aligner">
+    <svg id="board" viewBox="0 0 100 100"></svg>
+  </div>
+
+  <div class="aligner">
+    <img class="arrow" id="back-arrow" src="assets/undo-arrow.svg" alt="undo move">
+    <div id="reset"><span>reset</span></div>
+    <img class="arrow" id="forward-arrow" src="assets/undo-arrow.svg" alt="undo move">
+  </div>
+
+</body>
+
+</html>
