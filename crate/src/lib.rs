@@ -55,6 +55,10 @@ extern "C" {
     fn set_inner_html(this: &Element, html: &str);
     #[wasm_bindgen(method, js_name = appendChild)]
     fn append_child(this: &Element, other: Element);
+    
+    type Date;
+    #[wasm_bindgen(static_method_of = Date)]
+    pub fn now() -> f64;
 }
 
 // Called by our JS entry point to run the example
@@ -66,8 +70,8 @@ pub fn run() {
 }
 
 #[wasm_bindgen]
-pub fn three() -> i32 {
-    return 3;
+pub fn foo() -> f64 {
+    return Date::now();
 }
 
 #[wasm_bindgen]
@@ -76,7 +80,9 @@ pub fn check_game_outcome(board: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn pick_move(board: &str, n_rollouts: u32) -> i32 {
-    main::ai_pick_move(board.to_string(), n_rollouts)
+pub fn pick_move(board: &str, thinking_time: f64) -> i32 {
+    let start = Date::now();
+    let mut term = || Date::now() - start > thinking_time;
+    main::ai_pick_move(board.to_string(), &mut term)
 }
 

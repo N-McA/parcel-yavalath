@@ -96,6 +96,26 @@
       border-radius: 5px;
       margin-top: 6px;
     }
+
+    .pulsate {
+      animation: pulsate 3s ease-out;
+      animation-iteration-count: infinite;
+      opacity: 0.25;
+    }
+
+    @keyframes pulsate {
+      0% {
+        opacity: 0.25;
+      }
+
+      50% {
+        opacity: 1.0;
+      }
+
+      100% {
+        opacity: 0.25;
+      }
+    }
   </style>
 </head>
 
@@ -109,6 +129,10 @@
 
   <div class="aligner" id="board-aligner">
     <svg id="board" viewBox="0 0 100 100"></svg>
+  </div>
+
+  <div class="aligner pulsate">
+    <p>Thinking... (5s per move)</p>
   </div>
 
   <div class="aligner">

@@ -1,9 +1,9 @@
 extern crate rand;
 use rand::{thread_rng, Rng};
 
-extern crate time;
-use time::Duration;
-use time::PreciseTime;
+// extern crate time;
+// use time::Duration;
+// use time::PreciseTime;
 
 extern crate ordered_float;
 use ordered_float::OrderedFloat;
@@ -73,221 +73,8 @@ trait GameBoard: Copy + Clone + Hash + Eq + fmt::Display {
 
 trait GameAgent {
     type Board: GameBoard;
-    fn choose_move(&mut self, b: Self::Board) -> <Self::Board as GameBoard>::Move;
+    fn choose_move(&mut self, b: Self::Board, terminate: &mut (FnMut() -> bool)) -> <Self::Board as GameBoard>::Move;
     fn reset_game_specific_state(&mut self);
-}
-
-fn matchup<B, Agent1, Agent2>(p0: &mut Agent1, p1: &mut Agent2) -> i32
-where
-    B: GameBoard,
-    Agent1: GameAgent<Board = B>,
-    Agent2: GameAgent<Board = B>,
-{
-    let mut state: B = B::new();
-    loop {
-        match state.outcome() {
-            GameOutcome::Ongoing => match state.whose_turn() {
-                Player::P0 => {
-                    state = state.apply_move(p0.choose_move(state));
-                    if SHOW_MATCHUPS {
-                        println!("{}", state);
-                    }
-                }
-                Player::P1 => {
-                    state = state.apply_move(p1.choose_move(state));
-                    if SHOW_MATCHUPS {
-                        println!("{}", state);
-                    }
-                }
-            },
-            GameOutcome::Winner(Player::P0) => {
-                return 1;
-            }
-            GameOutcome::Winner(Player::P1) => {
-                return -1;
-            }
-            GameOutcome::Draw => {
-                return 0;
-            }
-            GameOutcome::Invalid => {
-                panic!();
-            }
-        }
-    }
-}
-
-fn tourney<B, Agent1, Agent2>(p0: &mut Agent1, p1: &mut Agent2, n_games: u32) -> i32
-where
-    B: GameBoard,
-    Agent1: GameAgent<Board = B>,
-    Agent2: GameAgent<Board = B>,
-{
-    let mut winloss = 0;
-    let mut n_draws = 0;
-    for i in 0..n_games {
-        let result;
-        if (i % 2) == 0 {
-            result = matchup(p0, p1);
-            winloss += result;
-        } else {
-            result = -matchup(p1, p0);
-            winloss += result;
-        }
-        if result == 0 {
-            n_draws += 1;
-        }
-        p0.reset_game_specific_state();
-        p1.reset_game_specific_state();
-        // println!("{}","-".repeat(50));
-    }
-    println!("n_draws: {}", n_draws);
-    return winloss;
-}
-
-struct RandomPlayer {}
-
-impl GameAgent for RandomPlayer {
-    type Board = YavalathBoard;
-    fn choose_move(&mut self, state: Self::Board) -> <Self::Board as GameBoard>::Move {
-        return uniform_random_choice(&mut state.legal_moves().into_iter()).unwrap();
-    }
-    fn reset_game_specific_state(&mut self) {}
-}
-
-struct MinMax {}
-
-fn minmax_score<B>(state: B, original_player: &Player) -> OrderedFloat<f32>
-where
-    B: GameBoard,
-{
-    match state.outcome() {
-        GameOutcome::Ongoing => {
-            if state.whose_turn() == *original_player {
-                state
-                    .afterstates()
-                    .iter()
-                    .map(|&s| minmax_score(s, original_player))
-                    .max()
-                    .unwrap()
-            } else {
-                state
-                    .afterstates()
-                    .iter()
-                    .map(|&s| minmax_score(s, original_player))
-                    .min()
-                    .unwrap()
-            }
-        }
-        GameOutcome::Winner(Player::P1) => OrderedFloat(LOSE_VALUE),
-        GameOutcome::Winner(Player::P0) => OrderedFloat(WIN_VALUE),
-        GameOutcome::Draw => OrderedFloat(DRAW_VALUE),
-        GameOutcome::Invalid => panic!(),
-    }
-}
-
-impl GameAgent for MinMax {
-    type Board = TicTacBoard;
-    fn choose_move(&mut self, root_state: Self::Board) -> <Self::Board as GameBoard>::Move {
-        let mut states = Vec::new();
-        states.push(root_state);
-
-        let moves = root_state.legal_moves();
-        let me = root_state.whose_turn();
-        match me {
-            Player::P0 => {
-                return *moves
-                    .iter()
-                    .max_by_key(move |&&m| minmax_score(root_state.apply_move(m), &me))
-                    .unwrap()
-            }
-            Player::P1 => {
-                return *moves
-                    .iter()
-                    .min_by_key(move |&&m| minmax_score(root_state.apply_move(m), &me))
-                    .unwrap()
-            }
-        }
-    }
-    fn reset_game_specific_state(&mut self) {}
-}
-
-struct NaiveMCTS<B>
-where
-    B: GameBoard,
-{
-    transposition_table: TransTable<B>,
-    n_rollouts: u32,
-}
-
-impl<B> NaiveMCTS<B>
-where
-    B: GameBoard,
-{
-    fn new(n_rollouts: u32) -> Self {
-        return NaiveMCTS {
-            n_rollouts,
-            transposition_table: HashMap::new(),
-        };
-    }
-}
-
-impl<B> GameAgent for NaiveMCTS<B>
-where
-    B: GameBoard,
-{
-    type Board = B;
-    fn choose_move(&mut self, root_state: B) -> B::Move {
-        let mut states = Vec::new();
-        let mut outcome_value;
-
-        for _rollout_n in 0..self.n_rollouts {
-            states.clear();
-            states.push(root_state);
-            loop {
-                let state = *states.last().unwrap();
-                match state.outcome() {
-                    GameOutcome::Ongoing => {
-                        let ms = &mut state.legal_moves().into_iter();
-                        let m = uniform_random_choice(ms).unwrap();
-                        states.push(state.apply_move(m));
-                    }
-                    GameOutcome::Winner(Player::P1) => {
-                        outcome_value = LOSE_VALUE;
-                        break;
-                    }
-                    GameOutcome::Winner(Player::P0) => {
-                        outcome_value = WIN_VALUE;
-                        break;
-                    }
-                    GameOutcome::Draw => {
-                        outcome_value = DRAW_VALUE;
-                        break;
-                    }
-                    GameOutcome::Invalid => panic!(),
-                }
-            }
-            for (depth, &state) in states.iter().enumerate() {
-                let (visitation_count, win_count) = self
-                    .transposition_table
-                    .entry(state)
-                    .or_insert((0f32, 0f32));
-                *visitation_count += 1f32;
-                *win_count += outcome_value * DISCOUNT.powi(depth as i32);
-            }
-        }
-        let score = |&mv| match self.transposition_table.get(&root_state.apply_move(mv)) {
-            Some((visits, wins)) => OrderedFloat(wins / visits),
-            None => OrderedFloat(-1f32),
-        };
-        let moves = root_state.legal_moves();
-        match root_state.whose_turn() {
-            Player::P0 => return *moves.iter().max_by_key(|&m| score(m)).unwrap(),
-            Player::P1 => return *moves.iter().min_by_key(|&m| score(m)).unwrap(),
-        }
-    }
-    fn reset_game_specific_state(&mut self) {
-        self.transposition_table.clear();
-    }
 }
 
 struct MCTS<B>
@@ -437,20 +224,18 @@ where
     B: GameBoard,
 {
     type Board = B;
-    fn choose_move(&mut self, root_state: B) -> B::Move {
+    fn choose_move(&mut self, root_state: B, terminate: &mut (FnMut() -> bool)) -> B::Move {
         self.clean_table(root_state);
         let mut states = Vec::new();
         let mut outcome_value;
-        // let start = PreciseTime::now();
+        // let start = Date::now();
         let mut achieved_rollouts = 0;
         for _rollout_n in 0..self.n_rollouts {
             if _rollout_n % 10 == 0 {
                 print!("\r{}", _rollout_n);
                 stdout().flush();
             }
-            // if start.to(PreciseTime::now()) > Duration::seconds(3) {
-            //     break;
-            // }
+            if terminate() { break; } 
             achieved_rollouts += 1;
             states.clear();
             states.push(root_state);
@@ -1062,11 +847,11 @@ fn compute_tables(some_masks: &[u64], n: usize) {
     println!("{:?}", all_rows);
 }
 
-pub extern "C" fn ai_pick_move(board_hex: String, rollouts: u32) -> i32 {
+pub extern "C" fn ai_pick_move(board_hex: String, terminate: &mut (FnMut() -> bool)) -> i32 {
     match parse_board_hex(board_hex) {
         Ok(bb) => {
-            let mut player = MCTS::<YavalathBoard>::new(rollouts);
-            let ai_move = player.choose_move(bb);
+            let mut player = MCTS::<YavalathBoard>::new(100000);
+            let ai_move = player.choose_move(bb, terminate);
             ai_move as i32
         },
         Err(_) => -1,
