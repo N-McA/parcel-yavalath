@@ -59,3 +59,23 @@ npm run build
 2. install `wasm-bindgen-cli` automatically if missing,
 3. compile Rust wasm,
 4. generate JS bindings in `src/wasm/`.
+
+## Build for a GitHub Pages subdirectory
+
+If your GitHub Pages site should serve the game from a subdirectory (for example `/random/`), use:
+
+```bash
+npm run build:subdir -- ./random /random/
+```
+
+This helper script will:
+
+1. run the normal production build with the supplied Vite base path,
+2. recreate the target directory,
+3. copy the built `dist/` files into that target.
+
+If you omit the base path, it is inferred from the target path.
+
+```bash
+npm run build:subdir -- ./random
+```
