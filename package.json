@@ -7,7 +7,8 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "dev": "npm run build:wasm && vite",
     "build": "npm run build:wasm && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:subdir": "node scripts/build-for-subdir.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.0"
