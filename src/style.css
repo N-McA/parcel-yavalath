@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, system-ui, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f6f7fb;
+  color: #111827;
+}
+
+.app {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 1rem;
+  text-align: center;
+}
+
+.subtitle {
+  margin-top: -0.3rem;
+  color: #374151;
+}
+
+#status {
+  margin: 0.8rem auto;
+  font-weight: 700;
+}
+
+#board {
+  width: min(95vw, 760px);
+  height: auto;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+}
+
+.cell {
+  fill: #f8fafc;
+  stroke: #94a3b8;
+  stroke-width: 2;
+  cursor: pointer;
+}
+
+.cell:hover {
+  fill: #e2e8f0;
+}
+
+.cell.p0 {
+  fill: #ef4444;
+}
+
+.cell.p1 {
+  fill: #0ea5e9;
+}
+
+.cell.line {
+  stroke: #111827;
+  stroke-width: 5;
+}
+
+.controls {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+  gap: 0.8rem;
+}
+
+button {
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  background: white;
+  cursor: pointer;
+}
