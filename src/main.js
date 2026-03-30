@@ -1,5 +1,5 @@
 import './style.css';
-import initWasm, { check_game_outcome, pick_move } from './wasm/yavalath_engine.js';
+import initWasm, { check_game_outcome, pick_move_with_strength } from './wasm/yavalath_engine.js';
 
 const RADIUS = 4;
 const BOARD_CELLS = 61;
@@ -17,6 +17,14 @@ const aiMoveBtn = document.getElementById('ai-move');
 const undoMoveBtn = document.getElementById('undo-move');
 const swapMoveBtn = document.getElementById('swap-move');
 const aiFirstMoveBtn = document.getElementById('ai-first-move');
+const aiStrengthSelect = document.getElementById('ai-strength');
+
+const AI_PRESETS = {
+  0: { strength: 0, budgetMs: 140 },
+  1: { strength: 1, budgetMs: 320 },
+  2: { strength: 2, budgetMs: 900 },
+  3: { strength: 3, budgetMs: 1800 },
+};
 
 const state = {
   p0: Array(BOARD_CELLS).fill(false),
@@ -28,6 +36,7 @@ const state = {
   busy: false,
   line: [],
   history: [],
+  aiStrength: Number(aiStrengthSelect?.value ?? 2),
 };
 
 const coords = [];
@@ -188,7 +197,8 @@ async function maybeRunAi() {
   refresh();
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  const mv = pick_move(boardHex(), 900);
+  const preset = AI_PRESETS[state.aiStrength] ?? AI_PRESETS[2];
+  const mv = pick_move_with_strength(boardHex(), preset.budgetMs, preset.strength);
   if (mv === SWAP_MOVE) {
     applySwap();
   } else if (mv >= 0 && mv < BOARD_CELLS) {
@@ -234,6 +244,10 @@ aiFirstMoveBtn.addEventListener('click', () => {
   if (state.ply !== 0 || state.busy) return;
   state.aiPlayer = 0;
   maybeRunAi();
+});
+
+aiStrengthSelect?.addEventListener('change', () => {
+  state.aiStrength = Number(aiStrengthSelect.value);
 });
 
 await initWasm();

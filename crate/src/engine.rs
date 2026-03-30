@@ -310,99 +310,382 @@ fn cell_xy() -> Vec<(f64, f64)> {
 }
 
 fn distance_to_center(idx: u8) -> f64 {
+    if idx as usize >= BOARD_CELLS {
+        return f64::INFINITY;
+    }
     let xy = cell_xy();
     let (x, y) = xy[idx as usize];
     (x * x + y * y).sqrt()
 }
 
-fn tactical_order(pos: Position) -> Vec<u8> {
+#[derive(Clone, Copy)]
+struct SearchConfig {
+    iterations_per_ms: f64,
+    rollout_depth: usize,
+    exploration: f64,
+}
+
+impl SearchConfig {
+    fn from_strength(strength: u8) -> Self {
+        match strength {
+            0 => Self {
+                iterations_per_ms: 1.0,
+                rollout_depth: 16,
+                exploration: 1.1,
+            },
+            1 => Self {
+                iterations_per_ms: 2.0,
+                rollout_depth: 24,
+                exploration: 1.2,
+            },
+            2 => Self {
+                iterations_per_ms: 4.0,
+                rollout_depth: 32,
+                exploration: 1.3,
+            },
+            _ => Self {
+                iterations_per_ms: 7.0,
+                rollout_depth: 42,
+                exploration: 1.4,
+            },
+        }
+    }
+}
+
+fn legal_moves_with_swap(pos: Position) -> Vec<u8> {
     let mut moves = pos.legal_moves();
     if pos.can_swap() {
         moves.push(SWAP_MOVE);
     }
-    moves.sort_by(|&a, &b| {
-        let sa = move_priority(pos, a);
-        let sb = move_priority(pos, b);
-        sb.cmp(&sa).then_with(|| {
-            distance_to_center(a)
-                .partial_cmp(&distance_to_center(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    });
     moves
 }
 
-fn move_priority(pos: Position, mv: u8) -> i32 {
+fn apply_move_with_meta(pos: Position, mv: u8) -> Option<(Position, Option<(u8, u8)>)> {
     if mv == SWAP_MOVE {
-        if !pos.can_swap() {
-            return -10_000;
-        }
-        let Some(next) = pos.apply_swap() else {
-            return -10_000;
-        };
-        // Mild centrality-based estimate for swap value.
-        let swapped_stone = next.p0.trailing_zeros() as usize;
-        let center_bias = (distance_to_center(swapped_stone as u8) * 100.0) as i32;
-        return 100 - center_bias + heuristic(next, next.turn);
+        let next = pos.apply_swap()?;
+        Some((next, None))
+    } else {
+        let next = pos.apply(mv)?;
+        Some((next, Some((pos.turn, mv))))
     }
-
-    let us = pos.turn;
-    let them = us ^ 1;
-    let Some(next) = pos.apply(mv) else {
-        return -10_000;
-    };
-    match outcome(next, Some((us, mv))) {
-        Outcome::Win(_, _) => return 20_000,
-        Outcome::Lose(_, _) => return -20_000,
-        _ => {}
-    }
-    let mut score = 0;
-    for om in next.legal_moves() {
-        let Some(reply) = next.apply(om) else {
-            continue;
-        };
-        if matches!(outcome(reply, Some((them, om))), Outcome::Win(_, _)) {
-            score -= 2_000;
-        }
-    }
-    score - (distance_to_center(mv) * 100.0) as i32
 }
 
-fn heuristic(pos: Position, perspective: u8) -> i32 {
-    let me = pos.stones(perspective);
-    let them = pos.stones(perspective ^ 1);
-    let mut score = 0;
-    for &line in four_lines() {
-        let mut me_count = 0;
-        let mut them_count = 0;
-        for &idx in &line {
-            let mask = 1_u64 << idx;
-            if me & mask != 0 {
-                me_count += 1;
+fn winner_from_outcome(result: Outcome) -> Option<u8> {
+    match result {
+        Outcome::Win(player, _) => Some(player),
+        Outcome::Lose(player, _) => Some(player ^ 1),
+        _ => None,
+    }
+}
+
+fn losing_player_from_outcome(result: Outcome) -> Option<u8> {
+    match result {
+        Outcome::Lose(player, _) => Some(player),
+        _ => None,
+    }
+}
+
+fn immediate_winning_moves(pos: Position) -> Vec<u8> {
+    let us = pos.turn;
+    legal_moves_with_swap(pos)
+        .into_iter()
+        .filter(|&mv| {
+            let Some((next, jp)) = apply_move_with_meta(pos, mv) else {
+                return false;
+            };
+            matches!(outcome(next, jp), Outcome::Win(w, _) if w == us)
+        })
+        .collect()
+}
+
+fn immediate_losing_moves(pos: Position) -> Vec<u8> {
+    let us = pos.turn;
+    legal_moves_with_swap(pos)
+        .into_iter()
+        .filter(|&mv| {
+            let Some((next, jp)) = apply_move_with_meta(pos, mv) else {
+                return false;
+            };
+            matches!(outcome(next, jp), Outcome::Lose(l, _) if l == us)
+        })
+        .collect()
+}
+
+fn one_ply_safe_moves(pos: Position) -> Vec<u8> {
+    let all = legal_moves_with_swap(pos);
+    let us = pos.turn;
+    all.into_iter()
+        .filter(|&mv| {
+            let Some((next, jp)) = apply_move_with_meta(pos, mv) else {
+                return false;
+            };
+            if matches!(outcome(next, jp), Outcome::Lose(l, _) if l == us) {
+                return false;
             }
-            if them & mask != 0 {
-                them_count += 1;
-            }
-        }
-        if me_count > 0 && them_count > 0 {
-            continue;
-        }
-        if me_count == 3 {
-            score += 120;
-        } else if me_count == 2 {
-            score += 18;
-        } else if me_count == 1 {
-            score += 4;
-        }
-        if them_count == 3 {
-            score -= 160;
-        } else if them_count == 2 {
-            score -= 24;
-        } else if them_count == 1 {
-            score -= 4;
+            !next
+                .legal_moves()
+                .into_iter()
+                .filter_map(|reply| {
+                    let (reply_pos, reply_jp) = apply_move_with_meta(next, reply)?;
+                    Some(outcome(reply_pos, reply_jp))
+                })
+                .any(|res| matches!(res, Outcome::Win(w, _) if w == next.turn))
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct Rng64 {
+    state: u64,
+}
+
+impl Rng64 {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: if seed == 0 { 0x9e3779b97f4a7c15 } else { seed },
         }
     }
-    score
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    fn gen_index(&mut self, len: usize) -> usize {
+        if len <= 1 {
+            0
+        } else {
+            (self.next_u64() as usize) % len
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Node {
+    pos: Position,
+    just_played: Option<(u8, u8)>,
+    incoming_mv: Option<u8>,
+    children: Vec<usize>,
+    untried_moves: Vec<u8>,
+    visits: u32,
+    value_sum: f64,
+}
+
+fn centered_move_sort(moves: &mut [u8]) {
+    moves.sort_by(|a, b| {
+        distance_to_center(*a)
+            .partial_cmp(&distance_to_center(*b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn rollout_choice(pos: Position, rng: &mut Rng64) -> Option<u8> {
+    let wins = immediate_winning_moves(pos);
+    if !wins.is_empty() {
+        let mut ordered = wins;
+        centered_move_sort(&mut ordered);
+        return ordered.first().copied();
+    }
+
+    let safe = one_ply_safe_moves(pos);
+    if !safe.is_empty() {
+        return Some(safe[rng.gen_index(safe.len())]);
+    }
+
+    let losing = immediate_losing_moves(pos);
+    let mut all = legal_moves_with_swap(pos);
+    if all.is_empty() {
+        return None;
+    }
+    all.retain(|mv| !losing.contains(mv));
+    if all.is_empty() {
+        let mut fallback = legal_moves_with_swap(pos);
+        centered_move_sort(&mut fallback);
+        return fallback.first().copied();
+    }
+    Some(all[rng.gen_index(all.len())])
+}
+
+fn rollout(
+    mut pos: Position,
+    mut just_played: Option<(u8, u8)>,
+    root_player: u8,
+    rng: &mut Rng64,
+    max_depth: usize,
+) -> f64 {
+    for _ in 0..max_depth {
+        let result = outcome(pos, just_played);
+        if let Some(winner) = winner_from_outcome(result) {
+            return if winner == root_player { 1.0 } else { -1.0 };
+        }
+        if matches!(result, Outcome::Draw) {
+            return 0.0;
+        }
+
+        let Some(mv) = rollout_choice(pos, rng) else {
+            return 0.0;
+        };
+        let Some((next, next_jp)) = apply_move_with_meta(pos, mv) else {
+            return 0.0;
+        };
+        pos = next;
+        just_played = next_jp;
+    }
+    0.0
+}
+
+fn mcts_select_child(nodes: &[Node], node_idx: usize, c: f64) -> usize {
+    let parent_visits = f64::from(nodes[node_idx].visits.max(1));
+    let mut best_child = nodes[node_idx].children[0];
+    let mut best_score = f64::NEG_INFINITY;
+    for &child_idx in &nodes[node_idx].children {
+        let child = &nodes[child_idx];
+        if child.visits == 0 {
+            return child_idx;
+        }
+        let exploit = child.value_sum / f64::from(child.visits);
+        let explore = ((parent_visits.ln()) / f64::from(child.visits)).sqrt();
+        let score = exploit + c * explore;
+        if score > best_score {
+            best_score = score;
+            best_child = child_idx;
+        }
+    }
+    best_child
+}
+
+pub fn best_move_with_strength(pos: Position, budget_ms: f64, strength: u8) -> Option<u8> {
+    let legal = legal_moves_with_swap(pos);
+    if legal.is_empty() {
+        return None;
+    }
+
+    let wins = immediate_winning_moves(pos);
+    if !wins.is_empty() {
+        let mut ordered = wins;
+        centered_move_sort(&mut ordered);
+        return ordered.first().copied();
+    }
+
+    let safe = one_ply_safe_moves(pos);
+    if !safe.is_empty() {
+        if safe.len() == 1 {
+            return safe.first().copied();
+        }
+    }
+
+    let config = SearchConfig::from_strength(strength);
+    let min_budget = 10.0;
+    let adjusted_budget = budget_ms.max(min_budget);
+    let max_iterations =
+        ((adjusted_budget * config.iterations_per_ms) as usize).clamp(120, 250_000);
+    let deadline = now_ms() + adjusted_budget;
+    let root_player = pos.turn;
+    let seed = pos.p0
+        ^ pos.p1.rotate_left(7)
+        ^ u64::from(pos.ply).rotate_left(17)
+        ^ u64::from(strength).rotate_left(29);
+    let mut rng = Rng64::new(seed);
+
+    let mut root_untried = legal;
+    centered_move_sort(&mut root_untried);
+    let mut nodes = vec![Node {
+        pos,
+        just_played: None,
+        incoming_mv: None,
+        children: Vec::new(),
+        untried_moves: root_untried,
+        visits: 0,
+        value_sum: 0.0,
+    }];
+
+    let mut iterations = 0usize;
+    while iterations < max_iterations && now_ms() < deadline {
+        iterations += 1;
+        let mut node_idx = 0usize;
+        let mut path = vec![0usize];
+
+        while nodes[node_idx].untried_moves.is_empty() && !nodes[node_idx].children.is_empty() {
+            node_idx = mcts_select_child(&nodes, node_idx, config.exploration);
+            path.push(node_idx);
+        }
+
+        if !nodes[node_idx].untried_moves.is_empty() {
+            let pick_idx = rng.gen_index(nodes[node_idx].untried_moves.len());
+            let mv = nodes[node_idx].untried_moves.swap_remove(pick_idx);
+            if let Some((next, jp)) = apply_move_with_meta(nodes[node_idx].pos, mv) {
+                let mut untried = legal_moves_with_swap(next);
+                centered_move_sort(&mut untried);
+                let new_idx = nodes.len();
+                nodes.push(Node {
+                    pos: next,
+                    just_played: jp,
+                    incoming_mv: Some(mv),
+                    children: Vec::new(),
+                    untried_moves: untried,
+                    visits: 0,
+                    value_sum: 0.0,
+                });
+                nodes[node_idx].children.push(new_idx);
+                node_idx = new_idx;
+                path.push(node_idx);
+            }
+        }
+
+        let leaf = &nodes[node_idx];
+        let result = outcome(leaf.pos, leaf.just_played);
+        let mut value = if let Some(winner) = winner_from_outcome(result) {
+            if winner == root_player {
+                1.0
+            } else {
+                -1.0
+            }
+        } else if matches!(result, Outcome::Draw) {
+            0.0
+        } else if let Some(loser) = losing_player_from_outcome(result) {
+            if loser == root_player {
+                -1.0
+            } else {
+                1.0
+            }
+        } else {
+            rollout(
+                leaf.pos,
+                leaf.just_played,
+                root_player,
+                &mut rng,
+                config.rollout_depth,
+            )
+        };
+
+        for idx in path.into_iter().rev() {
+            nodes[idx].visits += 1;
+            nodes[idx].value_sum += value;
+            value = -value;
+        }
+    }
+
+    if nodes[0].children.is_empty() {
+        let mut fallback = legal_moves_with_swap(pos);
+        centered_move_sort(&mut fallback);
+        return fallback.first().copied();
+    }
+
+    let mut best_child = nodes[0].children[0];
+    for &c in &nodes[0].children[1..] {
+        if nodes[c].visits > nodes[best_child].visits {
+            best_child = c;
+        }
+    }
+    nodes[best_child].incoming_mv
+}
+
+pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
+    best_move_with_strength(pos, budget_ms, 2)
 }
 
 fn now_ms() -> f64 {
@@ -415,113 +698,6 @@ fn now_ms() -> f64 {
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
     }
-}
-
-fn negamax(
-    pos: Position,
-    depth: i32,
-    mut alpha: i32,
-    beta: i32,
-    just_played: Option<(u8, u8)>,
-) -> i32 {
-    match outcome(pos, just_played) {
-        Outcome::Win(w, _) => {
-            return if w == pos.turn {
-                100_000 + depth
-            } else {
-                -100_000 - depth
-            }
-        }
-        Outcome::Lose(l, _) => {
-            return if l == pos.turn {
-                -100_000 - depth
-            } else {
-                100_000 + depth
-            }
-        }
-        Outcome::Draw => return 0,
-        Outcome::Invalid => return -200_000,
-        Outcome::Ongoing => {}
-    }
-    if depth == 0 {
-        return heuristic(pos, pos.turn);
-    }
-
-    let mut best = -1_000_000;
-    let moves = tactical_order(pos);
-    for mv in moves {
-        let (next, next_just_played) = if mv == SWAP_MOVE {
-            let Some(next) = pos.apply_swap() else { continue };
-            (next, None)
-        } else {
-            let Some(next) = pos.apply(mv) else { continue };
-            (next, Some((pos.turn, mv)))
-        };
-        let score = -negamax(
-            next,
-            depth - 1,
-            -beta,
-            -alpha,
-            next_just_played,
-        );
-        if score > best {
-            best = score;
-        }
-        if best > alpha {
-            alpha = best;
-        }
-        if alpha >= beta {
-            break;
-        }
-    }
-    best
-}
-
-pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
-    let legal = tactical_order(pos);
-    if legal.is_empty() {
-        return None;
-    }
-    let start = now_ms();
-    let mut best = legal[0];
-    let mut best_score = -1_000_000;
-    let mut depth = 1;
-    while now_ms() - start < budget_ms.max(10.0) {
-        let mut local_best = best;
-        let mut local_best_score = -1_000_000;
-        for &mv in &legal {
-            if now_ms() - start >= budget_ms.max(10.0) {
-                break;
-            }
-            let (next, next_just_played) = if mv == SWAP_MOVE {
-                let Some(next) = pos.apply_swap() else { continue };
-                (next, None)
-            } else {
-                let Some(next) = pos.apply(mv) else { continue };
-                (next, Some((pos.turn, mv)))
-            };
-            let score = -negamax(
-                next,
-                depth - 1,
-                -1_000_000,
-                1_000_000,
-                next_just_played,
-            );
-            if score > local_best_score {
-                local_best_score = score;
-                local_best = mv;
-            }
-        }
-        if local_best_score > best_score {
-            best_score = local_best_score;
-            best = local_best;
-        }
-        depth += 1;
-        if depth > 6 {
-            break;
-        }
-    }
-    Some(best)
 }
 
 pub fn parse_board_hex(board_hex: &str) -> Result<Position, &'static str> {
@@ -567,7 +743,11 @@ pub fn parse_board_hex(board_hex: &str) -> Result<Position, &'static str> {
         return Err("invalid move parity");
     }
     let ply = (p0_count + p1_count) as u8;
-    let turn = if is_swapped_opening || p0_count == p1_count { 0 } else { 1 };
+    let turn = if is_swapped_opening || p0_count == p1_count {
+        0
+    } else {
+        1
+    };
     Ok(Position { p0, p1, turn, ply })
 }
 
@@ -637,7 +817,9 @@ mod tests {
         // Only P1 has one stone: valid board after swap choice.
         let mut p1: u64 = 0;
         p1 |= 1_u64 << 30;
-        let bits = format!("{:064b}{:064b}", 0_u64, p1).chars().collect::<Vec<_>>();
+        let bits = format!("{:064b}{:064b}", 0_u64, p1)
+            .chars()
+            .collect::<Vec<_>>();
         let mut hex = String::new();
         for chunk in bits.chunks(4) {
             let s: String = chunk.iter().collect();
@@ -674,5 +856,13 @@ mod tests {
         let pos = position_after_moves(&[0, 26, 10, 35, 20, 43]);
         assert_eq!(pos.turn, 0);
         assert_eq!(best_move(pos, 200.0), Some(50));
+    }
+
+    #[test]
+    fn best_move_handles_swap_position_without_panicking() {
+        let pos = position_after_moves(&[30]);
+        assert!(pos.can_swap());
+        let mv = best_move_with_strength(pos, 60.0, 2);
+        assert!(mv.is_some());
     }
 }
