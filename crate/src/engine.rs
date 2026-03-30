@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 const BOARD_RADIUS: i32 = 4;
 const BOARD_CELLS: usize = 61;
@@ -371,24 +372,35 @@ fn heuristic(pos: Position, perspective: u8) -> i32 {
     score
 }
 
+fn now_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    }
+}
+
 fn negamax(
     pos: Position,
     depth: i32,
     mut alpha: i32,
     beta: i32,
-    root_player: u8,
     just_played: Option<(u8, u8)>,
 ) -> i32 {
     match outcome(pos, just_played) {
         Outcome::Win(w, _) => {
-            return if w == root_player {
+            return if w == pos.turn {
                 100_000 + depth
             } else {
                 -100_000 - depth
             }
         }
         Outcome::Lose(l, _) => {
-            return if l == root_player {
+            return if l == pos.turn {
                 -100_000 - depth
             } else {
                 100_000 + depth
@@ -399,7 +411,7 @@ fn negamax(
         Outcome::Ongoing => {}
     }
     if depth == 0 {
-        return heuristic(pos, root_player);
+        return heuristic(pos, pos.turn);
     }
 
     let mut best = -1_000_000;
@@ -411,7 +423,6 @@ fn negamax(
             depth - 1,
             -beta,
             -alpha,
-            root_player,
             Some((pos.turn, mv)),
         );
         if score > best {
@@ -432,16 +443,15 @@ pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
     if legal.is_empty() {
         return None;
     }
-    let start = js_sys::Date::now();
-    let root_player = pos.turn;
+    let start = now_ms();
     let mut best = legal[0];
     let mut best_score = -1_000_000;
     let mut depth = 1;
-    while js_sys::Date::now() - start < budget_ms.max(10.0) {
+    while now_ms() - start < budget_ms.max(10.0) {
         let mut local_best = best;
         let mut local_best_score = -1_000_000;
         for &mv in &legal {
-            if js_sys::Date::now() - start >= budget_ms.max(10.0) {
+            if now_ms() - start >= budget_ms.max(10.0) {
                 break;
             }
             let Some(next) = pos.apply(mv) else { continue };
@@ -450,8 +460,7 @@ pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
                 depth - 1,
                 -1_000_000,
                 1_000_000,
-                root_player,
-                Some((root_player, mv)),
+                Some((pos.turn, mv)),
             );
             if score > local_best_score {
                 local_best_score = score;
@@ -556,6 +565,14 @@ pub fn encode_outcome(outcome: Outcome) -> String {
 mod tests {
     use super::*;
 
+    fn position_after_moves(moves: &[u8]) -> Position {
+        let mut pos = Position::empty();
+        for &mv in moves {
+            pos = pos.apply(mv).expect("move must be legal");
+        }
+        pos
+    }
+
     #[test]
     fn empty_board_parses() {
         let p = parse_board_hex("00000000000000000000000000000000").unwrap();
@@ -567,5 +584,22 @@ mod tests {
     fn legal_move_count() {
         let p = Position::empty();
         assert_eq!(p.legal_moves().len(), 61);
+    }
+
+    #[test]
+    fn engine_takes_immediate_win() {
+        // Player 0 can win immediately with 50:
+        // 26-35-43-50 is a line of four on r = -4.
+        let pos = position_after_moves(&[26, 0, 35, 1, 43, 5]);
+        assert_eq!(pos.turn, 0);
+        assert_eq!(best_move(pos, 200.0), Some(50));
+    }
+
+    #[test]
+    fn engine_blocks_opponents_immediate_win() {
+        // Player 1 threatens 26-35-43-50; only 50 blocks the immediate win.
+        let pos = position_after_moves(&[0, 26, 10, 35, 20, 43]);
+        assert_eq!(pos.turn, 0);
+        assert_eq!(best_move(pos, 200.0), Some(50));
     }
 }
