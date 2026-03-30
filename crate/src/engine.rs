@@ -1,9 +1,11 @@
 use serde::Serialize;
 use std::sync::OnceLock;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 const BOARD_RADIUS: i32 = 4;
 const BOARD_CELLS: usize = 61;
+pub const SWAP_MOVE: u8 = BOARD_CELLS as u8;
 const DIRS: [(i32, i32); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 const LINE_DIRS: [(i32, i32); 3] = [(1, 0), (0, 1), (1, -1)];
 
@@ -33,6 +35,7 @@ pub struct Position {
 }
 
 impl Position {
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub fn empty() -> Self {
         Self {
             p0: 0,
@@ -57,6 +60,10 @@ impl Position {
         moves
     }
 
+    pub fn can_swap(self) -> bool {
+        self.ply == 1 && self.turn == 1
+    }
+
     pub fn apply(self, mv: u8) -> Option<Self> {
         if mv as usize >= BOARD_CELLS {
             return None;
@@ -73,6 +80,16 @@ impl Position {
         }
         next.turn ^= 1;
         next.ply += 1;
+        Some(next)
+    }
+
+    pub fn apply_swap(self) -> Option<Self> {
+        if !self.can_swap() {
+            return None;
+        }
+        let mut next = self;
+        std::mem::swap(&mut next.p0, &mut next.p1);
+        next.turn ^= 1;
         Some(next)
     }
 
@@ -300,6 +317,9 @@ fn distance_to_center(idx: u8) -> f64 {
 
 fn tactical_order(pos: Position) -> Vec<u8> {
     let mut moves = pos.legal_moves();
+    if pos.can_swap() {
+        moves.push(SWAP_MOVE);
+    }
     moves.sort_by(|&a, &b| {
         let sa = move_priority(pos, a);
         let sb = move_priority(pos, b);
@@ -313,6 +333,19 @@ fn tactical_order(pos: Position) -> Vec<u8> {
 }
 
 fn move_priority(pos: Position, mv: u8) -> i32 {
+    if mv == SWAP_MOVE {
+        if !pos.can_swap() {
+            return -10_000;
+        }
+        let Some(next) = pos.apply_swap() else {
+            return -10_000;
+        };
+        // Mild centrality-based estimate for swap value.
+        let swapped_stone = next.p0.trailing_zeros() as usize;
+        let center_bias = (distance_to_center(swapped_stone as u8) * 100.0) as i32;
+        return 100 - center_bias + heuristic(next, next.turn);
+    }
+
     let us = pos.turn;
     let them = us ^ 1;
     let Some(next) = pos.apply(mv) else {
@@ -417,13 +450,19 @@ fn negamax(
     let mut best = -1_000_000;
     let moves = tactical_order(pos);
     for mv in moves {
-        let Some(next) = pos.apply(mv) else { continue };
+        let (next, next_just_played) = if mv == SWAP_MOVE {
+            let Some(next) = pos.apply_swap() else { continue };
+            (next, None)
+        } else {
+            let Some(next) = pos.apply(mv) else { continue };
+            (next, Some((pos.turn, mv)))
+        };
         let score = -negamax(
             next,
             depth - 1,
             -beta,
             -alpha,
-            Some((pos.turn, mv)),
+            next_just_played,
         );
         if score > best {
             best = score;
@@ -454,13 +493,19 @@ pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
             if now_ms() - start >= budget_ms.max(10.0) {
                 break;
             }
-            let Some(next) = pos.apply(mv) else { continue };
+            let (next, next_just_played) = if mv == SWAP_MOVE {
+                let Some(next) = pos.apply_swap() else { continue };
+                (next, None)
+            } else {
+                let Some(next) = pos.apply(mv) else { continue };
+                (next, Some((pos.turn, mv)))
+            };
             let score = -negamax(
                 next,
                 depth - 1,
                 -1_000_000,
                 1_000_000,
-                Some((pos.turn, mv)),
+                next_just_played,
             );
             if score > local_best_score {
                 local_best_score = score;
@@ -517,11 +562,12 @@ pub fn parse_board_hex(board_hex: &str) -> Result<Position, &'static str> {
 
     let p0_count = p0.count_ones();
     let p1_count = p1.count_ones();
-    if p0_count < p1_count || p0_count > p1_count + 1 {
+    let is_swapped_opening = p0_count == 0 && p1_count == 1;
+    if !(is_swapped_opening || (p0_count >= p1_count && p0_count <= p1_count + 1)) {
         return Err("invalid move parity");
     }
     let ply = (p0_count + p1_count) as u8;
-    let turn = if p0_count == p1_count { 0 } else { 1 };
+    let turn = if is_swapped_opening || p0_count == p1_count { 0 } else { 1 };
     Ok(Position { p0, p1, turn, ply })
 }
 
@@ -584,6 +630,33 @@ mod tests {
     fn legal_move_count() {
         let p = Position::empty();
         assert_eq!(p.legal_moves().len(), 61);
+    }
+
+    #[test]
+    fn swapped_opening_parses() {
+        // Only P1 has one stone: valid board after swap choice.
+        let mut p1: u64 = 0;
+        p1 |= 1_u64 << 30;
+        let bits = format!("{:064b}{:064b}", 0_u64, p1).chars().collect::<Vec<_>>();
+        let mut hex = String::new();
+        for chunk in bits.chunks(4) {
+            let s: String = chunk.iter().collect();
+            hex.push(std::char::from_digit(u32::from_str_radix(&s, 2).unwrap(), 16).unwrap());
+        }
+        let p = parse_board_hex(&hex).unwrap();
+        assert_eq!(p.ply, 1);
+        assert_eq!(p.turn, 0);
+    }
+
+    #[test]
+    fn swap_is_legal_only_for_second_player_after_first_move() {
+        let p = position_after_moves(&[30]);
+        assert!(p.can_swap());
+        let next = p.apply_swap().unwrap();
+        assert_eq!(next.p0, 0);
+        assert_eq!(next.p1, 1_u64 << 30);
+        assert_eq!(next.turn, 0);
+        assert!(!next.can_swap());
     }
 
     #[test]

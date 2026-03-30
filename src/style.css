@@ -30,8 +30,6 @@ body {
   width: min(95vw, 760px);
   height: auto;
   background: white;
-  border: 1px solid #d1d5db;
-  border-radius: 12px;
 }
 
 .cell {
@@ -71,4 +69,9 @@ button {
   padding: 0.5rem 1rem;
   background: white;
   cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
