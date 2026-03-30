@@ -2,6 +2,8 @@ import './style.css';
 import initWasm, { check_game_outcome, pick_move } from './wasm/yavalath_engine.js';
 
 const RADIUS = 4;
+const BOARD_CELLS = 61;
+const SWAP_MOVE = BOARD_CELLS;
 const HEX_SIZE = 42;
 const W = Math.sqrt(3) * HEX_SIZE;
 const H = 2 * HEX_SIZE;
@@ -12,13 +14,20 @@ const boardSvg = document.getElementById('board');
 const statusEl = document.getElementById('status');
 const newGameBtn = document.getElementById('new-game');
 const aiMoveBtn = document.getElementById('ai-move');
+const undoMoveBtn = document.getElementById('undo-move');
+const swapMoveBtn = document.getElementById('swap-move');
+const aiFirstMoveBtn = document.getElementById('ai-first-move');
 
 const state = {
-  moves: [],
+  p0: Array(BOARD_CELLS).fill(false),
+  p1: Array(BOARD_CELLS).fill(false),
+  turn: 0,
+  ply: 0,
   gameOver: false,
   aiPlayer: 1,
   busy: false,
   line: [],
+  history: [],
 };
 
 const coords = [];
@@ -32,11 +41,39 @@ for (let q = -RADIUS; q <= RADIUS; q += 1) {
 
 const elements = coords.map((coord, idx) => createHex(coord, idx));
 
+function cloneSnapshot() {
+  return {
+    p0: [...state.p0],
+    p1: [...state.p1],
+    turn: state.turn,
+    ply: state.ply,
+    gameOver: state.gameOver,
+    line: [...state.line],
+  };
+}
+
+function restoreSnapshot(snapshot) {
+  state.p0 = [...snapshot.p0];
+  state.p1 = [...snapshot.p1];
+  state.turn = snapshot.turn;
+  state.ply = snapshot.ply;
+  state.gameOver = snapshot.gameOver;
+  state.line = [...snapshot.line];
+}
+
+function occupied(idx) {
+  return state.p0[idx] || state.p1[idx];
+}
+
+function canSwap() {
+  return state.ply === 1 && state.turn === 1;
+}
+
 function createHex([q, r], idx) {
   const [cx, cy] = axialToPixel(q, r);
   const points = [];
   for (let i = 0; i < 6; i += 1) {
-    const angle = Math.PI / 3 * i + Math.PI / 6;
+    const angle = (Math.PI / 3) * i + Math.PI / 6;
     points.push(`${cx + HEX_SIZE * Math.cos(angle)},${cy + HEX_SIZE * Math.sin(angle)}`);
   }
   const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -49,28 +86,19 @@ function createHex([q, r], idx) {
 }
 
 function axialToPixel(q, r) {
-  return [
-    X_OFFSET + W * (q + r / 2),
-    Y_OFFSET + (H * 0.75) * r,
-  ];
+  return [X_OFFSET + W * (q + r / 2), Y_OFFSET + H * 0.75 * r];
 }
 
-function onCellClick(e) {
-  if (state.gameOver || state.busy) return;
-  const idx = Number(e.currentTarget.dataset.idx);
-  if (state.moves.includes(idx)) return;
-  state.moves.push(idx);
-  refresh();
-  maybeRunAi();
-}
-
-function gameStateToBoardHex(moves) {
+function boardHex() {
   const bitsP0 = Array(64).fill('0');
   const bitsP1 = Array(64).fill('0');
-  moves.forEach((move, i) => {
-    if (i % 2 === 0) bitsP0[move] = '1';
-    else bitsP1[move] = '1';
+  state.p0.forEach((filled, idx) => {
+    if (filled) bitsP0[idx] = '1';
   });
+  state.p1.forEach((filled, idx) => {
+    if (filled) bitsP1[idx] = '1';
+  });
+
   const bits = bitsP0.slice().reverse().join('') + bitsP1.slice().reverse().join('');
   let out = '';
   for (let i = 0; i < bits.length; i += 4) {
@@ -80,17 +108,49 @@ function gameStateToBoardHex(moves) {
 }
 
 function readOutcome() {
-  const hex = gameStateToBoardHex(state.moves);
-  return JSON.parse(check_game_outcome(hex));
+  return JSON.parse(check_game_outcome(boardHex()));
+}
+
+function applyMove(idx) {
+  if (state.gameOver || state.busy || occupied(idx)) return false;
+  state.history.push(cloneSnapshot());
+  if (state.turn === 0) state.p0[idx] = true;
+  else state.p1[idx] = true;
+  state.turn ^= 1;
+  state.ply += 1;
+  return true;
+}
+
+function applySwap() {
+  if (state.gameOver || state.busy || !canSwap()) return false;
+  state.history.push(cloneSnapshot());
+  const oldP0 = state.p0;
+  state.p0 = state.p1;
+  state.p1 = oldP0;
+  state.turn ^= 1;
+  return true;
+}
+
+function undoOneMove() {
+  if (state.busy) return;
+  const prev = state.history.pop();
+  if (!prev) return;
+  restoreSnapshot(prev);
+  refresh();
+}
+
+function onCellClick(e) {
+  const idx = Number(e.currentTarget.dataset.idx);
+  if (!applyMove(idx)) return;
+  refresh();
+  maybeRunAi();
 }
 
 function refresh() {
   elements.forEach((el, idx) => {
     el.classList.remove('p0', 'p1', 'line');
-    const turn = state.moves.indexOf(idx);
-    if (turn >= 0) {
-      el.classList.add(turn % 2 === 0 ? 'p0' : 'p1');
-    }
+    if (state.p0[idx]) el.classList.add('p0');
+    if (state.p1[idx]) el.classList.add('p1');
   });
 
   const outcome = readOutcome();
@@ -99,9 +159,13 @@ function refresh() {
   state.line.forEach((i) => elements[i]?.classList.add('line'));
 
   if (outcome.state === 'ongoing') {
-    statusEl.textContent = state.busy
-      ? 'AI is thinking...'
-      : `Turn: ${state.moves.length % 2 === 0 ? 'Red' : 'Blue'}`;
+    if (state.busy) {
+      statusEl.textContent = 'AI is thinking...';
+    } else if (canSwap()) {
+      statusEl.textContent = 'Blue may play a move or use swap rule.';
+    } else {
+      statusEl.textContent = `Turn: ${state.turn === 0 ? 'Red' : 'Blue'}`;
+    }
   } else if (outcome.state === 'draw') {
     statusEl.textContent = 'Draw.';
   } else if (outcome.state === 'win') {
@@ -111,32 +175,64 @@ function refresh() {
   } else {
     statusEl.textContent = 'Invalid board state.';
   }
+
+  swapMoveBtn.disabled = !canSwap() || state.busy || state.gameOver;
+  undoMoveBtn.disabled = state.history.length === 0 || state.busy;
 }
 
 async function maybeRunAi() {
   if (state.gameOver || state.busy) return;
-  if (state.moves.length % 2 !== state.aiPlayer) return;
+  if (state.turn !== state.aiPlayer) return;
+
   state.busy = true;
   refresh();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  const hex = gameStateToBoardHex(state.moves);
-  const mv = pick_move(hex, 900);
-  if (mv >= 0 && !state.moves.includes(mv)) {
-    state.moves.push(mv);
+
+  const mv = pick_move(boardHex(), 900);
+  if (mv === SWAP_MOVE) {
+    applySwap();
+  } else if (mv >= 0 && mv < BOARD_CELLS) {
+    applyMove(mv);
   }
+
   state.busy = false;
   refresh();
 }
 
-newGameBtn.addEventListener('click', () => {
-  state.moves = [];
+function resetGame() {
+  state.p0 = Array(BOARD_CELLS).fill(false);
+  state.p1 = Array(BOARD_CELLS).fill(false);
+  state.turn = 0;
+  state.ply = 0;
   state.gameOver = false;
   state.busy = false;
   state.line = [];
+  state.history = [];
+}
+
+newGameBtn.addEventListener('click', () => {
+  state.aiPlayer = 1;
+  resetGame();
   refresh();
 });
 
+undoMoveBtn.addEventListener('click', () => {
+  undoOneMove();
+});
+
+swapMoveBtn.addEventListener('click', () => {
+  if (!applySwap()) return;
+  refresh();
+  maybeRunAi();
+});
+
 aiMoveBtn.addEventListener('click', () => {
+  maybeRunAi();
+});
+
+aiFirstMoveBtn.addEventListener('click', () => {
+  if (state.ply !== 0 || state.busy) return;
+  state.aiPlayer = 0;
   maybeRunAi();
 });
 
