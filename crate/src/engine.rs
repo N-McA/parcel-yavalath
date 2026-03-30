@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::sync::OnceLock;
 
 const BOARD_RADIUS: i32 = 4;
 const BOARD_CELLS: usize = 61;
@@ -75,7 +76,11 @@ impl Position {
     }
 
     pub fn stones(self, player: u8) -> u64 {
-        if player == 0 { self.p0 } else { self.p1 }
+        if player == 0 {
+            self.p0
+        } else {
+            self.p1
+        }
     }
 }
 
@@ -139,8 +144,35 @@ fn all_four_lines() -> Vec<[u8; 4]> {
     lines
 }
 
+fn three_lines() -> &'static [[u8; 3]] {
+    static THREE_LINES: OnceLock<Vec<[u8; 3]>> = OnceLock::new();
+    THREE_LINES.get_or_init(all_three_lines).as_slice()
+}
+
+fn four_lines() -> &'static [[u8; 4]] {
+    static FOUR_LINES: OnceLock<Vec<[u8; 4]>> = OnceLock::new();
+    FOUR_LINES.get_or_init(all_four_lines).as_slice()
+}
+
+fn stepped_neighbors() -> &'static [[[Option<u8>; 3]; 6]; BOARD_CELLS] {
+    static STEPPED_NEIGHBORS: OnceLock<[[[Option<u8>; 3]; 6]; BOARD_CELLS]> = OnceLock::new();
+    STEPPED_NEIGHBORS.get_or_init(|| {
+        let (cells, map) = idx_maps();
+        let mut stepped = [[[(None); 3]; 6]; BOARD_CELLS];
+        for (idx, &(q, r)) in cells.iter().enumerate() {
+            for (dir_idx, &(dq, dr)) in DIRS.iter().enumerate() {
+                for step in 1..=3 {
+                    let n = (q + dq * step, r + dr * step);
+                    stepped[idx][dir_idx][(step - 1) as usize] = map.get(&n).copied();
+                }
+            }
+        }
+        stepped
+    })
+}
+
 fn has_line3(bits: u64) -> Option<[u8; 3]> {
-    for l in all_three_lines() {
+    for &l in three_lines() {
         if l.iter().all(|&i| bits & (1_u64 << i) != 0) {
             return Some(l);
         }
@@ -149,7 +181,7 @@ fn has_line3(bits: u64) -> Option<[u8; 3]> {
 }
 
 fn has_line4(bits: u64) -> Option<[u8; 4]> {
-    for l in all_four_lines() {
+    for &l in four_lines() {
         if l.iter().all(|&i| bits & (1_u64 << i) != 0) {
             return Some(l);
         }
@@ -157,14 +189,89 @@ fn has_line4(bits: u64) -> Option<[u8; 4]> {
     None
 }
 
-pub fn outcome(pos: Position, just_played: Option<u8>) -> Outcome {
-    if let Some(player) = just_played {
+fn contiguous_in_direction(bits: u64, from: u8, dir_idx: usize) -> Vec<u8> {
+    let mut run = Vec::with_capacity(3);
+    for maybe_idx in stepped_neighbors()[from as usize][dir_idx] {
+        let Some(idx) = maybe_idx else { break };
+        if bits & (1_u64 << idx) == 0 {
+            break;
+        }
+        run.push(idx);
+    }
+    run
+}
+
+fn window_containing(chain: &[u8], center_idx: usize, width: usize) -> Option<&[u8]> {
+    if chain.len() < width {
+        return None;
+    }
+    let start = center_idx.saturating_sub(width - 1);
+    let max_start = center_idx.min(chain.len() - width);
+    let start = start.min(max_start);
+    Some(&chain[start..start + width])
+}
+
+fn has_line4_from_move(bits: u64, mv: u8) -> Option<[u8; 4]> {
+    for &(dir_pos, dir_neg) in &[(0_usize, 3_usize), (1, 4), (2, 5)] {
+        let mut negative = contiguous_in_direction(bits, mv, dir_neg);
+        let positive = contiguous_in_direction(bits, mv, dir_pos);
+        if negative.len() + 1 + positive.len() < 4 {
+            continue;
+        }
+        negative.reverse();
+        let center = negative.len();
+        let mut chain = Vec::with_capacity(negative.len() + 1 + positive.len());
+        chain.extend(negative);
+        chain.push(mv);
+        chain.extend(positive);
+        if let Some(line) = window_containing(&chain, center, 4) {
+            return line.try_into().ok();
+        }
+    }
+    None
+}
+
+fn has_line3_from_move(bits: u64, mv: u8) -> Option<[u8; 3]> {
+    for &(dir_pos, dir_neg) in &[(0_usize, 3_usize), (1, 4), (2, 5)] {
+        let mut negative = contiguous_in_direction(bits, mv, dir_neg);
+        let positive = contiguous_in_direction(bits, mv, dir_pos);
+        if negative.len() + 1 + positive.len() < 3 {
+            continue;
+        }
+        negative.reverse();
+        let center = negative.len();
+        let mut chain = Vec::with_capacity(negative.len() + 1 + positive.len());
+        chain.extend(negative);
+        chain.push(mv);
+        chain.extend(positive);
+        if let Some(line) = window_containing(&chain, center, 3) {
+            return line.try_into().ok();
+        }
+    }
+    None
+}
+
+pub fn outcome(pos: Position, just_played: Option<(u8, u8)>) -> Outcome {
+    if let Some((player, last_move)) = just_played {
         let bits = pos.stones(player);
-        if let Some(line4) = has_line4(bits) {
+        if let Some(line4) = has_line4_from_move(bits, last_move) {
             return Outcome::Win(player, line4);
         }
-        if let Some(line3) = has_line3(bits) {
+        if let Some(line3) = has_line3_from_move(bits, last_move) {
             return Outcome::Lose(player, line3);
+        }
+    } else {
+        if let Some(line4) = has_line4(pos.p0) {
+            return Outcome::Win(0, line4);
+        }
+        if let Some(line3) = has_line3(pos.p0) {
+            return Outcome::Lose(0, line3);
+        }
+        if let Some(line4) = has_line4(pos.p1) {
+            return Outcome::Win(1, line4);
+        }
+        if let Some(line3) = has_line3(pos.p1) {
+            return Outcome::Lose(1, line3);
         }
     }
     if pos.ply as usize >= BOARD_CELLS {
@@ -210,15 +317,17 @@ fn move_priority(pos: Position, mv: u8) -> i32 {
     let Some(next) = pos.apply(mv) else {
         return -10_000;
     };
-    match outcome(next, Some(us)) {
+    match outcome(next, Some((us, mv))) {
         Outcome::Win(_, _) => return 20_000,
         Outcome::Lose(_, _) => return -20_000,
         _ => {}
     }
     let mut score = 0;
     for om in next.legal_moves() {
-        let Some(reply) = next.apply(om) else { continue };
-        if matches!(outcome(reply, Some(them)), Outcome::Win(_, _)) {
+        let Some(reply) = next.apply(om) else {
+            continue;
+        };
+        if matches!(outcome(reply, Some((them, om))), Outcome::Win(_, _)) {
             score -= 2_000;
         }
     }
@@ -229,7 +338,7 @@ fn heuristic(pos: Position, perspective: u8) -> i32 {
     let me = pos.stones(perspective);
     let them = pos.stones(perspective ^ 1);
     let mut score = 0;
-    for line in all_four_lines() {
+    for &line in four_lines() {
         let mut me_count = 0;
         let mut them_count = 0;
         for &idx in &line {
@@ -262,10 +371,29 @@ fn heuristic(pos: Position, perspective: u8) -> i32 {
     score
 }
 
-fn negamax(pos: Position, depth: i32, mut alpha: i32, beta: i32, root_player: u8, just_played: Option<u8>) -> i32 {
+fn negamax(
+    pos: Position,
+    depth: i32,
+    mut alpha: i32,
+    beta: i32,
+    root_player: u8,
+    just_played: Option<(u8, u8)>,
+) -> i32 {
     match outcome(pos, just_played) {
-        Outcome::Win(w, _) => return if w == root_player { 100_000 + depth } else { -100_000 - depth },
-        Outcome::Lose(l, _) => return if l == root_player { -100_000 - depth } else { 100_000 + depth },
+        Outcome::Win(w, _) => {
+            return if w == root_player {
+                100_000 + depth
+            } else {
+                -100_000 - depth
+            }
+        }
+        Outcome::Lose(l, _) => {
+            return if l == root_player {
+                -100_000 - depth
+            } else {
+                100_000 + depth
+            }
+        }
         Outcome::Draw => return 0,
         Outcome::Invalid => return -200_000,
         Outcome::Ongoing => {}
@@ -278,7 +406,14 @@ fn negamax(pos: Position, depth: i32, mut alpha: i32, beta: i32, root_player: u8
     let moves = tactical_order(pos);
     for mv in moves {
         let Some(next) = pos.apply(mv) else { continue };
-        let score = -negamax(next, depth - 1, -beta, -alpha, root_player, Some(pos.turn));
+        let score = -negamax(
+            next,
+            depth - 1,
+            -beta,
+            -alpha,
+            root_player,
+            Some((pos.turn, mv)),
+        );
         if score > best {
             best = score;
         }
@@ -310,7 +445,14 @@ pub fn best_move(pos: Position, budget_ms: f64) -> Option<u8> {
                 break;
             }
             let Some(next) = pos.apply(mv) else { continue };
-            let score = -negamax(next, depth - 1, -1_000_000, 1_000_000, root_player, Some(root_player));
+            let score = -negamax(
+                next,
+                depth - 1,
+                -1_000_000,
+                1_000_000,
+                root_player,
+                Some((root_player, mv)),
+            );
             if score > local_best_score {
                 local_best_score = score;
                 local_best = mv;
