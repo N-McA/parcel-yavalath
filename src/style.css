@@ -60,6 +60,8 @@ body {
   margin-top: 1rem;
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.8rem;
 }
 
@@ -74,4 +76,18 @@ button {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.strength-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+select {
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  background: white;
 }

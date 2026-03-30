@@ -5,3 +5,6 @@ crate/target
 crate/wasm-pack.log
 .cache
 .bin
+
+# generated wasm artifacts
+src/wasm/*.wasm
