@@ -8,8 +8,7 @@ pub fn check_game_outcome(board_hex: &str) -> String {
         return engine::encode_outcome(engine::Outcome::Invalid);
     };
 
-    let just_played = if pos.ply == 0 { None } else { Some(pos.turn ^ 1) };
-    engine::encode_outcome(engine::outcome(pos, just_played))
+    engine::encode_outcome(engine::outcome(pos, None))
 }
 
 #[wasm_bindgen]
