@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-mod engine;
+pub mod engine;
 
 #[wasm_bindgen]
 pub fn check_game_outcome(board_hex: &str) -> String {

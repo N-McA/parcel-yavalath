@@ -1,0 +1,13 @@
+{
+  "seed": 42,
+  "games_per_pair": 30,
+  "bootstrap_samples": 200,
+  "players": [
+    {"name": "random", "commit": "HEAD", "strategy": "random"},
+    {"name": "sequence", "commit": "HEAD", "strategy": "sequence"},
+    {"name": "strength-0", "commit": "HEAD", "strategy": "strength", "strength": 0, "time_ms": 20.0},
+    {"name": "strength-1", "commit": "HEAD", "strategy": "strength", "strength": 1, "time_ms": 20.0},
+    {"name": "strength-2", "commit": "HEAD", "strategy": "strength", "strength": 2, "time_ms": 20.0},
+    {"name": "strength-3", "commit": "HEAD", "strategy": "strength", "strength": 3, "time_ms": 20.0}
+  ]
+}

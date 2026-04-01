@@ -59,3 +59,32 @@ npm run build
 2. install `wasm-bindgen-cli` automatically if missing,
 3. compile Rust wasm,
 4. generate JS bindings in `src/wasm/`.
+
+## Cross-commit AI arena + Elo
+
+This repo now includes a reusable arena system for running matches between **different commits** and **different AI configs**:
+
+- `crate/src/bin/arena_agent.rs`: a stdin/stdout move server used by tournaments.
+- `scripts/arena.py`: tournament runner that can pit commit A/config A vs commit B/config B and compute Elo with bootstrap 95% confidence intervals.
+- `configs/elo_current.json`: sample config for evaluating current built-in opponents.
+
+### Run Elo for current agents
+
+```bash
+python scripts/arena.py --config configs/elo_current.json > results/elo_current.json
+```
+
+### Example: commit A vs commit B
+
+```json
+{
+  "seed": 7,
+  "games_per_pair": 20,
+  "players": [
+    {"name": "old-s2", "commit": "<commitA>", "strategy": "strength", "strength": 2, "time_ms": 25.0},
+    {"name": "new-s2", "commit": "<commitB>", "strategy": "strength", "strength": 2, "time_ms": 25.0}
+  ]
+}
+```
+
+The runner automatically creates `git worktree`s for referenced commits and builds `arena_agent` inside each worktree before running games.
