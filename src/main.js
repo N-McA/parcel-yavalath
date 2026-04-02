@@ -120,8 +120,8 @@ function readOutcome() {
   return JSON.parse(check_game_outcome(boardHex()));
 }
 
-function applyMove(idx) {
-  if (state.gameOver || state.busy || occupied(idx)) return false;
+function applyMove(idx, { ignoreBusy = false } = {}) {
+  if (state.gameOver || (!ignoreBusy && state.busy) || occupied(idx)) return false;
   state.history.push(cloneSnapshot());
   if (state.turn === 0) state.p0[idx] = true;
   else state.p1[idx] = true;
@@ -130,8 +130,8 @@ function applyMove(idx) {
   return true;
 }
 
-function applySwap() {
-  if (state.gameOver || state.busy || !canSwap()) return false;
+function applySwap({ ignoreBusy = false } = {}) {
+  if (state.gameOver || (!ignoreBusy && state.busy) || !canSwap()) return false;
   state.history.push(cloneSnapshot());
   const oldP0 = state.p0;
   state.p0 = state.p1;
@@ -200,9 +200,9 @@ async function maybeRunAi() {
   const preset = AI_PRESETS[state.aiStrength] ?? AI_PRESETS[2];
   const mv = pick_move_with_strength(boardHex(), preset.budgetMs, preset.strength);
   if (mv === SWAP_MOVE) {
-    applySwap();
+    applySwap({ ignoreBusy: true });
   } else if (mv >= 0 && mv < BOARD_CELLS) {
-    applyMove(mv);
+    applyMove(mv, { ignoreBusy: true });
   }
 
   state.busy = false;
