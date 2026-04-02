@@ -298,24 +298,24 @@ pub fn outcome(pos: Position, just_played: Option<(u8, u8)>) -> Outcome {
     Outcome::Ongoing
 }
 
-fn cell_xy() -> Vec<(f64, f64)> {
-    axial_cells()
-        .into_iter()
-        .map(|(q, r)| {
+fn center_distances() -> &'static [f64; BOARD_CELLS] {
+    static CENTER_DISTANCES: OnceLock<[f64; BOARD_CELLS]> = OnceLock::new();
+    CENTER_DISTANCES.get_or_init(|| {
+        let mut distances = [0.0; BOARD_CELLS];
+        for (idx, (q, r)) in axial_cells().into_iter().enumerate() {
             let x = f64::from(q) + f64::from(r) / 2.0;
             let y = f64::from(r) * (3f64.sqrt() / 2.0);
-            (x, y)
-        })
-        .collect()
+            distances[idx] = (x * x + y * y).sqrt();
+        }
+        distances
+    })
 }
 
 fn distance_to_center(idx: u8) -> f64 {
     if idx as usize >= BOARD_CELLS {
         return f64::INFINITY;
     }
-    let xy = cell_xy();
-    let (x, y) = xy[idx as usize];
-    (x * x + y * y).sqrt()
+    center_distances()[idx as usize]
 }
 
 #[derive(Clone, Copy)]
@@ -329,24 +329,24 @@ impl SearchConfig {
     fn from_strength(strength: u8) -> Self {
         match strength {
             0 => Self {
-                iterations_per_ms: 1.0,
-                rollout_depth: 16,
-                exploration: 1.1,
+                iterations_per_ms: 1.5,
+                rollout_depth: 18,
+                exploration: 1.05,
             },
             1 => Self {
-                iterations_per_ms: 2.0,
-                rollout_depth: 24,
-                exploration: 1.2,
+                iterations_per_ms: 2.8,
+                rollout_depth: 26,
+                exploration: 1.15,
             },
             2 => Self {
-                iterations_per_ms: 4.0,
-                rollout_depth: 32,
-                exploration: 1.3,
+                iterations_per_ms: 5.2,
+                rollout_depth: 34,
+                exploration: 1.25,
             },
             _ => Self {
-                iterations_per_ms: 7.0,
-                rollout_depth: 42,
-                exploration: 1.4,
+                iterations_per_ms: 8.5,
+                rollout_depth: 48,
+                exploration: 1.35,
             },
         }
     }
@@ -411,6 +411,19 @@ fn immediate_losing_moves(pos: Position) -> Vec<u8> {
         .collect()
 }
 
+fn has_immediate_winning_reply(pos: Position) -> bool {
+    let player = pos.turn;
+    for mv in legal_moves_with_swap(pos) {
+        let Some((next, jp)) = apply_move_with_meta(pos, mv) else {
+            continue;
+        };
+        if matches!(outcome(next, jp), Outcome::Win(w, _) if w == player) {
+            return true;
+        }
+    }
+    false
+}
+
 fn one_ply_safe_moves(pos: Position) -> Vec<u8> {
     let all = legal_moves_with_swap(pos);
     let us = pos.turn;
@@ -422,14 +435,7 @@ fn one_ply_safe_moves(pos: Position) -> Vec<u8> {
             if matches!(outcome(next, jp), Outcome::Lose(l, _) if l == us) {
                 return false;
             }
-            !next
-                .legal_moves()
-                .into_iter()
-                .filter_map(|reply| {
-                    let (reply_pos, reply_jp) = apply_move_with_meta(next, reply)?;
-                    Some(outcome(reply_pos, reply_jp))
-                })
-                .any(|res| matches!(res, Outcome::Win(w, _) if w == next.turn))
+            !has_immediate_winning_reply(next)
         })
         .collect()
 }
@@ -493,15 +499,21 @@ fn rollout_choice(pos: Position, rng: &mut Rng64) -> Option<u8> {
 
     let safe = one_ply_safe_moves(pos);
     if !safe.is_empty() {
-        return Some(safe[rng.gen_index(safe.len())]);
+        let mut ordered = safe;
+        centered_move_sort(&mut ordered);
+        let top_k = ordered.len().min(3);
+        return Some(ordered[rng.gen_index(top_k)]);
     }
 
     let losing = immediate_losing_moves(pos);
+    let losing_mask = losing
+        .iter()
+        .fold(0_u64, |mask, &mv| if mv < SWAP_MOVE { mask | (1_u64 << mv) } else { mask });
     let mut all = legal_moves_with_swap(pos);
     if all.is_empty() {
         return None;
     }
-    all.retain(|mv| !losing.contains(mv));
+    all.retain(|&mv| mv == SWAP_MOVE || (losing_mask & (1_u64 << mv)) == 0);
     if all.is_empty() {
         let mut fallback = legal_moves_with_swap(pos);
         centered_move_sort(&mut fallback);
@@ -677,7 +689,10 @@ pub fn best_move_with_strength(pos: Position, budget_ms: f64, strength: u8) -> O
 
     let mut best_child = nodes[0].children[0];
     for &c in &nodes[0].children[1..] {
-        if nodes[c].visits > nodes[best_child].visits {
+        if nodes[c].visits > nodes[best_child].visits
+            || (nodes[c].visits == nodes[best_child].visits
+                && nodes[c].value_sum > nodes[best_child].value_sum)
+        {
             best_child = c;
         }
     }
